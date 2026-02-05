@@ -549,7 +549,7 @@ def generate_accounts():
         'https': f'http://{user_pass[0]}:{user_pass[1]}@{ip_port}'
     }
 
-    res = requests.post('https://api.resy.com/2/user/registration', headers=headers, data=data, proxies=proxiesObj)
+    res = requests.post('https://api.resy.com/2/user/registration', headers=headers, data=data, proxies=proxiesObj, verify=False)
     response = res.json()
     accToken = response['user']['token']
     print(f'Account Token: {accToken}\n')
@@ -627,7 +627,7 @@ def setup_intent(accToken, proxiesObj):
         'X-Resy-Universal-Auth': accToken,
     }
 
-    response = requests.post('https://api.resy.com/3/stripe/setup_intent', headers=headers, proxies=proxiesObj)
+    response = requests.post('https://api.resy.com/3/stripe/setup_intent', headers=headers, proxies=proxiesObj, verify=False)
     res = response.json()
     return res['client_secret']
 
@@ -654,7 +654,7 @@ def setPm(accToken, pm, proxiesObj):
     data = {
         'stripe_payment_method_id': pm,
     }
-    response = requests.post('https://api.resy.com/3/stripe/payment_method', headers=headers, data=data, proxies=proxiesObj)
+    response = requests.post('https://api.resy.com/3/stripe/payment_method', headers=headers, data=data, proxies=proxiesObj, verify=False)
     print(f'Final Response: {response.text}')
 
 """ def get_captcha_token(captcha_key, site_key, url, proxies):
@@ -815,7 +815,7 @@ def cancel_reservation(auth_token, resy_token):
         'resy_token': resy_token,
     }
     try:
-        response = requests.post('https://api.resy.com/3/cancel', headers=headers, data=data, proxies=proxy)
+        response = requests.post('https://api.resy.com/3/cancel', headers=headers, data=data, proxies=proxy, verify=False)
         if response.status_code == 200:
             click.echo(click.style('Reservation cancelled successfully!', fg='green'))
             reservations = load_data(RESERVATIONS_FILE, [])
@@ -851,8 +851,12 @@ def get_account_reservations(auth_token, account_name):
         'type': 'upcoming',
     }
 
-    response = requests.get('https://api.resy.com/3/user/reservations', params=params, headers=headers, proxies=proxy)
+    response = requests.get('https://api.resy.com/3/user/reservations', params=params, headers=headers, proxies=proxy, verify=False)
     res = response.json()
+
+    if 'reservations' not in res:
+        print(f'Failed to get reservations for {account_name}: {res}')
+        return []
 
     account_reservations = []
     for reservation in res['reservations']:
@@ -1030,8 +1034,8 @@ def start_tasks():
         click.echo('No tasks found. Please add tasks before starting.')
         return
     if not proxies:
-        click.echo('No proxies found. Please add proxies before starting.')
-        return
+        click.echo('No proxies found. Running without proxies.')
+        proxies = None
     if not info:
         click.echo('No user info found. Please set user info before starting.')
         return

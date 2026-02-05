@@ -1,3 +1,4 @@
+from typing import Optional
 from fastapi import FastAPI, HTTPException, Header
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -29,13 +30,13 @@ class DetailsRequest(BaseModel):
     config_token: str
     restaurant_id: str
     headers: dict
-    select_proxy: dict
+    select_proxy: Optional[dict] = None
 
 class ReservationRequest(BaseModel):
     book_token: str
     payment_id: int
     headers: dict
-    select_proxy: dict
+    select_proxy: Optional[dict] = None
 
 def format_proxy_url(proxy_url: str) -> str:
     if not urlparse(proxy_url).scheme:
@@ -53,8 +54,9 @@ async def get_details(data: DetailsRequest):
     logger.debug(f"Request data: {data}")
 
     # Format proxy URLs
-    formatted_proxies = {}
+    formatted_proxies = None
     if data.select_proxy:
+        formatted_proxies = {}
         for scheme, proxy in data.select_proxy.items():
             formatted_proxies[f"{scheme}://"] = format_proxy_url(proxy)
         formatted_proxies['https://'] = formatted_proxies.get('http://', formatted_proxies.get('https://', ''))
@@ -62,13 +64,13 @@ async def get_details(data: DetailsRequest):
     url = f'https://api.resy.com/3/details?day={data.day}&party_size={data.party_size}&x-resy-auth-token={data.headers["X-Resy-Auth-Token"]}&venue_id={data.restaurant_id}&config_id={data.config_token}'
     headers = {
         'Accept': '*/*',
-        'Accept-Encoding': 'gzip, deflate, br',
         'Authorization': data.headers["Authorization"],
-        'Host': 'api.resy.com',
         'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Origin': 'https://resy.com',
+        'Referer': 'https://resy.com/',
     }
 
-    async with httpx.AsyncClient(proxies=formatted_proxies) as client:
+    async with httpx.AsyncClient(proxies=formatted_proxies, verify=False) as client:
         try:
             response = await client.get(url, headers=headers)
             logger.info(f"Get Details API request made to {url} using proxy {formatted_proxies}")
@@ -95,8 +97,9 @@ async def book_reservation(data: ReservationRequest):
     logger.debug(f"Request data: {data}")
 
     # Format proxy URLs
-    formatted_proxies = {}
+    formatted_proxies = None
     if data.select_proxy:
+        formatted_proxies = {}
         for scheme, proxy in data.select_proxy.items():
             formatted_proxies[f"{scheme}://"] = format_proxy_url(proxy)
         formatted_proxies['https://'] = formatted_proxies.get('http://', formatted_proxies.get('https://', ''))
@@ -109,20 +112,18 @@ async def book_reservation(data: ReservationRequest):
     }
 
     headers = {
-        'Host': 'api.resy.com',
         'X-Origin': 'https://widgets.resy.com',
         'X-Resy-Auth-Token': data.headers['X-Resy-Auth-Token'],
         'Authorization': data.headers['Authorization'],
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         'X-Resy-Universal-Auth': data.headers['X-Resy-Auth-Token'],
         'Accept': 'application/json, text/plain, */*',
-        'Cache-Control': 'no-cache',
-        'Sec-Fetch-Dest': 'empty',
+        'Origin': 'https://widgets.resy.com',
         'Referer': 'https://widgets.resy.com/',
         'Content-Type': 'application/x-www-form-urlencoded',
     }
 
-    async with httpx.AsyncClient(proxies=formatted_proxies) as client:
+    async with httpx.AsyncClient(proxies=formatted_proxies, verify=False) as client:
         response = await client.post(url, data=payload, headers=headers)
 
     logger.info(f"Reservation request made. Status code: {response.status_code} using proxy {formatted_proxies}")

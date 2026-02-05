@@ -1,9 +1,12 @@
 import random
 import time
 import requests
+import urllib3
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import capsolver
 from urllib.parse import quote
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
 def format_proxy(proxy_str):
@@ -30,10 +33,9 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
             'Authorization': 'ResyAPI api_key="VbWk7s3L4KiK5fzlO7JD3Q5EYolJI7n5"',
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
             'X-Resy-Universal-Auth': auth_token,
-            'Accept-Encoding': 'gzip, deflate, br',
-            'Host': 'api.resy.com',
             'Accept': 'application/json, text/plain, */*',
             'Referer': 'https://resy.com/',
+            'Origin': 'https://resy.com',
     }
 
     #captcha_key = capsolver_key if captcha_service == 'CAPSolver' else capmonster_key
@@ -41,10 +43,10 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
 
     while True:
         try:
-            select_proxy = format_proxy(random.choice(proxies))
+            select_proxy = format_proxy(random.choice(proxies)) if proxies else None
 
             url = f"https://api.resy.com/4/venue/calendar?venue_id={restaurant_id}&num_seats={party_sz}&start_date={start_date}&end_date={end_date}"
-            response = requests.get(url, headers=headers, proxies=select_proxy)
+            response = requests.get(url, headers=headers, proxies=select_proxy, verify=False)
 
             if response.status_code != 200:
                 send_discord_notification(webhook_url, f'(1) Failed to get availability for restaurant {restaurant_id} - {response.text} - {response.status_code}')
@@ -58,7 +60,7 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
                 if entry['inventory']['reservation'] == 'available':
 
                     url2 = f"https://api.resy.com/4/find?lat=0&long=0&day={entry['date']}&party_size={party_sz}&venue_id={restaurant_id}"
-                    response2 = requests.get(url2, headers=headers, proxies=select_proxy)
+                    response2 = requests.get(url2, headers=headers, proxies=select_proxy, verify=False)
 
                     if response2.status_code != 200:
                         send_discord_notification(webhook_url, f'(2) Failed to get availability for restaurant {restaurant_id}')
@@ -78,6 +80,9 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
                             if int(time_part) >= int(start_time) and int(time_part) <= int(end_time):
                                 book_token = get_details(entry['date'], party_sz, config_token, restaurant_id, headers, select_proxy)
                                 print('\nBook_token is :', book_token)
+                                if not book_token:
+                                    send_discord_notification(webhook_url, f'Failed to get book token for restaurant {restaurant_id}')
+                                    return
                                 reservationVal = book_reservation(book_token, auth_token, payment_id, entry['date'], party_sz, restaurant_id, config_token, headers, select_proxy)
 
                                 if 'reservation_id' in reservationVal or ('specs' in reservationVal and 'reservation_id' in reservationVal['specs']):
