@@ -31,6 +31,8 @@ INFO_FILE = 'info.json'
 ACCESS_KEY_FILE = 'access_key.json'
 ACCOUNTS_FILE = 'accounts.json'
 RESERVATIONS_FILE = 'resrevations.json'
+SCHEDULED_TASKS_FILE = 'scheduled_tasks.json'
+RESTAURANT_CACHE_FILE = 'restaurant_cache.json'
 
 # Load existing data
 def load_data(file, default):
@@ -43,6 +45,224 @@ def load_data(file, default):
 def save_data(file, data):
     with open(file, 'w') as f:
         json.dump(data, f, indent=4)
+
+def check_token_validity(auth_token):
+    """Check if an auth token is still valid by making a lightweight API call"""
+    try:
+        headers = {
+            'Authorization': 'ResyAPI api_key="VbWk7s3L4KiK5fzlO7JD3Q5EYolJI7n5"',
+            'X-Resy-Auth-Token': auth_token,
+            'X-Resy-Universal-Auth': auth_token,
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Origin': 'https://resy.com',
+            'Referer': 'https://resy.com/',
+        }
+        r = requests.get('https://api.resy.com/2/user', headers=headers, timeout=10)
+        return r.status_code == 200
+    except Exception:
+        return False
+
+def get_restaurant_name(restaurant_id):
+    """Get restaurant name from cache or fetch from API"""
+    cache = load_data(RESTAURANT_CACHE_FILE, {})
+
+    # Return from cache if exists
+    if restaurant_id in cache:
+        return cache[restaurant_id]
+
+    # Fetch from API
+    try:
+        headers = {
+            'Authorization': 'ResyAPI api_key="VbWk7s3L4KiK5fzlO7JD3Q5EYolJI7n5"',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
+            'Accept': 'application/json',
+            'Origin': 'https://resy.com',
+            'Referer': 'https://resy.com/',
+        }
+        r = requests.get(f'https://api.resy.com/3/venue?id={restaurant_id}', headers=headers)
+        if r.status_code == 200:
+            name = r.json().get('name', f'Restaurant {restaurant_id}')
+            # Save to cache
+            cache[restaurant_id] = name
+            save_data(RESTAURANT_CACHE_FILE, cache)
+            return name
+    except Exception as e:
+        print(f"Could not fetch restaurant name for {restaurant_id}: {e}")
+
+    return f"Restaurant {restaurant_id}"
+
+def send_task_reminders():
+    """Send Discord summary of all tasks on bot startup"""
+    tasks = load_data(TASKS_FILE, [])
+    info = load_data(INFO_FILE, {})
+    accounts = load_data(ACCOUNTS_FILE, [])
+    proxies = load_data(PROXIES_FILE, [])
+    webhook_url = info.get('discord_webhook', '')
+
+    if not webhook_url or webhook_url == 'none':
+        return
+
+    today = datetime.date.today().strftime('%Y-%m-%d')
+    tomorrow = (datetime.date.today() + datetime.timedelta(days=1)).strftime('%Y-%m-%d')
+    current_time = datetime.datetime.now().strftime('%Y-%m-%d %I:%M %p')
+
+    lines = [f"**ResyBot Started** | {current_time}\n"]
+
+    # System status section
+    lines.append("**System Status:**")
+
+    # Check account tokens
+    if accounts:
+        valid_count = 0
+        invalid_accounts = []
+        for account in accounts:
+            if check_token_validity(account.get('auth_token', '')):
+                valid_count += 1
+            else:
+                invalid_accounts.append(account.get('account_name', 'Unknown'))
+
+        if valid_count == len(accounts):
+            lines.append(f"• Accounts: {len(accounts)} configured, all tokens valid")
+        else:
+            lines.append(f"• Accounts: {len(accounts)} configured, {valid_count} valid, {len(accounts) - valid_count} expired")
+            if invalid_accounts:
+                lines.append(f"  ⚠️ Expired: {', '.join(invalid_accounts)}")
+    else:
+        lines.append("• Accounts: None configured")
+
+    # Proxy status
+    lines.append(f"• Proxies: {len(proxies)} loaded" if proxies else "• Proxies: None configured")
+
+    # Captcha service status
+    captcha_services = []
+    if info.get('capsolver_key'):
+        captcha_services.append("CAPSolver")
+    if info.get('capmonster_key'):
+        captcha_services.append("CapMonster")
+    lines.append(f"• Captcha: {', '.join(captcha_services)}" if captcha_services else "• Captcha: Not configured")
+
+    lines.append("")
+
+    if not tasks:
+        lines.append("**Active Tasks:** None")
+    else:
+        lines.append("**Active Tasks:**")
+
+    for i, task in enumerate(tasks):
+        start_date = task.get('start_date', 'N/A')
+        task_name = task.get('task_name', f"Restaurant {task['restaurant_id']}")
+
+        # Add urgency indicator
+        if start_date == today:
+            urgency = "[TODAY]"
+        elif start_date == tomorrow:
+            urgency = "[TOMORROW]"
+        else:
+            urgency = ""
+
+        # Convert 24h to 12h format
+        start_hour = task.get('start_time', 0)
+        end_hour = task.get('end_time', 0)
+        start_12h = f"{start_hour % 12 or 12} {'AM' if start_hour < 12 else 'PM'}"
+        end_12h = f"{end_hour % 12 or 12} {'AM' if end_hour < 12 else 'PM'}"
+
+        lines.append(f"• **{task_name}** | {task['party_sz']} guests | {start_date} to {task.get('end_date', start_date)} | {start_12h} - {end_12h} {urgency}")
+
+    lines.append("")
+
+    # Add scheduled tasks section
+    scheduled_tasks_data = load_data(SCHEDULED_TASKS_FILE, [])
+    if scheduled_tasks_data:
+        lines.append("**Scheduled Runs:**")
+        for st in scheduled_tasks_data:
+            task_index = st['task_index']
+            if task_index < len(tasks):
+                task_name = tasks[task_index].get('task_name', f"Restaurant {tasks[task_index]['restaurant_id']}")
+            else:
+                task_name = "Unknown Task"
+
+            schedule_date = st.get('schedule_date', '')
+            schedule_time = st.get('schedule_time', '')
+            repeat = st.get('repeat', 'Once')
+
+            # Convert time to 12h format
+            try:
+                hour = int(schedule_time.split(':')[0])
+                time_12h = f"{hour % 12 or 12}:{schedule_time.split(':')[1]} {'AM' if hour < 12 else 'PM'}"
+            except:
+                time_12h = schedule_time
+
+            if repeat == 'Once' and schedule_date:
+                lines.append(f"• {task_name} | {schedule_date} at {time_12h}")
+            else:
+                lines.append(f"• {task_name} | {repeat} at {time_12h}")
+        lines.append("")
+
+    message = "\n".join(lines)
+
+    try:
+        requests.post(webhook_url, json={"content": message})
+        print(f"Sent startup summary for {len(tasks)} task(s) to Discord")
+    except Exception as e:
+        print(f"Failed to send Discord summary: {e}")
+
+# Send reminders on startup
+send_task_reminders()
+
+# Save scheduled task to file for persistence
+def save_scheduled_task(job_id, task_index, schedule_time, repeat, duration, schedule_date=""):
+    scheduled_tasks = load_data(SCHEDULED_TASKS_FILE, [])
+    scheduled_tasks.append({
+        'job_id': job_id,
+        'task_index': task_index,
+        'schedule_time': schedule_time,
+        'schedule_date': schedule_date,
+        'repeat': repeat,
+        'duration': duration
+    })
+    save_data(SCHEDULED_TASKS_FILE, scheduled_tasks)
+
+# Remove scheduled task from file
+def remove_scheduled_task_from_file(job_id):
+    scheduled_tasks = load_data(SCHEDULED_TASKS_FILE, [])
+    scheduled_tasks = [t for t in scheduled_tasks if t['job_id'] != job_id]
+    save_data(SCHEDULED_TASKS_FILE, scheduled_tasks)
+
+# Reload scheduled tasks on startup
+def reload_scheduled_tasks():
+    scheduled_tasks = load_data(SCHEDULED_TASKS_FILE, [])
+    for task_data in scheduled_tasks:
+        try:
+            schedule_time = datetime.datetime.strptime(task_data['schedule_time'], "%H:%M").time()
+            job_id = task_data['job_id']
+            task_index = task_data['task_index']
+            duration = task_data['duration']
+            repeat = task_data['repeat']
+            schedule_date_str = task_data.get('schedule_date', "")
+
+            if repeat == 'Daily':
+                scheduler.add_job(start_and_stop_task, 'cron', args=[task_index, duration, job_id],
+                                  hour=schedule_time.hour, minute=schedule_time.minute, id=job_id)
+            elif repeat == 'Weekly':
+                scheduler.add_job(start_and_stop_task, 'cron', args=[task_index, duration, job_id],
+                                  day_of_week='mon-sun', hour=schedule_time.hour, minute=schedule_time.minute, id=job_id)
+            else:  # Once
+                if schedule_date_str:
+                    schedule_date = datetime.datetime.strptime(schedule_date_str, "%Y-%m-%d").date()
+                else:
+                    schedule_date = datetime.date.today()
+                next_run = datetime.datetime.combine(schedule_date, schedule_time)
+                # Skip if already in the past
+                if next_run <= datetime.datetime.now():
+                    print(f"Skipping past scheduled task: {job_id}")
+                    remove_scheduled_task_from_file(job_id)
+                    continue
+                scheduler.add_job(start_and_stop_task, 'date', args=[task_index, duration, job_id],
+                                  run_date=next_run, id=job_id)
+            print(f"Reloaded scheduled task: {job_id}")
+        except Exception as e:
+            print(f"Failed to reload scheduled task {task_data.get('job_id', 'unknown')}: {e}")
 
 # Main CLI
 @click.group()
@@ -206,9 +426,20 @@ def add_task():
         click.echo('No accounts selected. Task creation cancelled.')
         return
 
+    # First get restaurant ID so we can fetch the name
+    restaurant_question = [
+        inquirer.Text('restaurant_id', message="Please enter the restaurant ID:")
+    ]
+    restaurant_answer = inquirer.prompt(restaurant_question)
+    restaurant_id = restaurant_answer['restaurant_id']
+
+    # Get restaurant name from cache or API
+    restaurant_name = get_restaurant_name(restaurant_id)
+    click.echo(f'Found restaurant: {restaurant_name}')
+
     # Then, prompt for other task details
     task_questions = [
-        inquirer.Text('restaurant_id', message="Please enter the restaurant ID:"),
+        inquirer.Text('task_name', message=f"Enter a name for this task:", default=restaurant_name),
         inquirer.Text('party_sz', message="Please enter the party sizes (comma-separated, e.g., 2,3,4):"),
         inquirer.Text('start_date', message="Please enter the start date (YYYY-MM-DD):"),
         inquirer.Text('end_date', message="Please enter the end date (YYYY-MM-DD):"),
@@ -226,7 +457,7 @@ def add_task():
 
     if task_answers['save_task']:
         selected_account_indices = account_answers['selected_accounts']
-        
+
         # Parse multiple party sizes
         party_sizes = [int(size.strip()) for size in task_answers['party_sz'].split(',') if size.strip().isdigit()]
 
@@ -236,10 +467,11 @@ def add_task():
             selected_account = accounts[selected_account_index]
             for party_size in party_sizes:
                 task = {
+                    'task_name': task_answers['task_name'],
                     'account_name': selected_account['account_name'],
                     'auth_token': selected_account['auth_token'],
                     'payment_id': selected_account['payment_id'],
-                    'restaurant_id': task_answers['restaurant_id'],
+                    'restaurant_id': restaurant_id,
                     'party_sz': party_size,
                     'start_date': task_answers['start_date'],
                     'end_date': task_answers['end_date'],
@@ -886,39 +1118,63 @@ def schedule_tasks():
     if not tasks:
         click.echo('No tasks found. Please add tasks before scheduling.')
         return
-    
+
     questions = [
-        inquirer.List('task_index', 
+        inquirer.List('task_index',
                       message="Select a task to schedule:",
-                      choices=[(f"Task {i+1}: {task['restaurant_id']}", i) for i, task in enumerate(tasks)]),
-        inquirer.Text('schedule_time', message="Enter the time to schedule (HH:MM):"),
-        inquirer.List('repeat', 
+                      choices=[(f"Task {i+1}: {task.get('task_name', task['restaurant_id'])}", i) for i, task in enumerate(tasks)]),
+        inquirer.List('repeat',
                       message="Repeat schedule?",
                       choices=['Daily', 'Weekly', 'Once']),
         inquirer.Text('duration', message="Enter task duration in seconds (5-10 recommended):", default="10")
     ]
     answers = inquirer.prompt(questions)
 
+    # Ask for date if "Once" is selected
+    if answers['repeat'] == 'Once':
+        date_question = [
+            inquirer.Text('schedule_date', message="Enter the date to run (YYYY-MM-DD, or press Enter for today):", default="")
+        ]
+        date_answer = inquirer.prompt(date_question)
+        schedule_date_str = date_answer['schedule_date']
+    else:
+        schedule_date_str = ""
+
+    time_question = [
+        inquirer.Text('schedule_time', message="Enter the time to schedule (HH:MM):")
+    ]
+    time_answer = inquirer.prompt(time_question)
+
     task_index = answers['task_index']
-    schedule_time = datetime.datetime.strptime(answers['schedule_time'], "%H:%M").time()
+    schedule_time = datetime.datetime.strptime(time_answer['schedule_time'], "%H:%M").time()
     duration = int(answers['duration'])
 
-    job_id = f"task_{task_index}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}"
-    
+    job_id = f"task_{task_index}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}_{uuid.uuid4().hex[:6]}"
+
     if answers['repeat'] == 'Daily':
-        scheduler.add_job(start_and_stop_task, 'cron', args=[task_index, duration, job_id], 
+        scheduler.add_job(start_and_stop_task, 'cron', args=[task_index, duration, job_id],
                           hour=schedule_time.hour, minute=schedule_time.minute, id=job_id)
     elif answers['repeat'] == 'Weekly':
-        scheduler.add_job(start_and_stop_task, 'cron', args=[task_index, duration, job_id], 
+        scheduler.add_job(start_and_stop_task, 'cron', args=[task_index, duration, job_id],
                           day_of_week='mon-sun', hour=schedule_time.hour, minute=schedule_time.minute, id=job_id)
     else:  # Once
-        next_run = datetime.datetime.combine(datetime.date.today(), schedule_time)
+        if schedule_date_str:
+            schedule_date = datetime.datetime.strptime(schedule_date_str, "%Y-%m-%d").date()
+        else:
+            schedule_date = datetime.date.today()
+        next_run = datetime.datetime.combine(schedule_date, schedule_time)
         if next_run <= datetime.datetime.now():
             next_run += datetime.timedelta(days=1)
-        scheduler.add_job(start_and_stop_task, 'date', args=[task_index, duration, job_id], 
+        scheduler.add_job(start_and_stop_task, 'date', args=[task_index, duration, job_id],
                           run_date=next_run, id=job_id)
 
-    click.echo(f"Task scheduled to run at {schedule_time.strftime('%H:%M')} {answers['repeat']} for {duration} seconds")
+    # Save to file for persistence
+    save_scheduled_task(job_id, task_index, time_answer['schedule_time'], answers['repeat'], duration, schedule_date_str)
+
+    if answers['repeat'] == 'Once' and schedule_date_str:
+        click.echo(f"Task scheduled to run on {schedule_date_str} at {schedule_time.strftime('%H:%M')} for {duration} seconds")
+    else:
+        click.echo(f"Task scheduled to run at {schedule_time.strftime('%H:%M')} {answers['repeat']} for {duration} seconds")
 
 def start_and_stop_task(task_index, duration, job_id):
     task_thread = threading.Thread(target=run_task_with_timeout, args=(task_index, duration, job_id))
@@ -928,11 +1184,15 @@ def run_task_with_timeout(task_index, duration, job_id):
     tasks = load_data(TASKS_FILE, [])
     proxies = load_data(PROXIES_FILE, [])
     info = load_data(INFO_FILE, {})
-    
+
     if task_index >= len(tasks):
         print(f"Error: Task index {task_index} out of range")
         return
-    
+
+    # Make proxies None if empty so task_executor handles it correctly
+    if not proxies:
+        proxies = None
+
     task = tasks[task_index]
     running_tasks[job_id] = {
         'thread': threading.current_thread(),
@@ -940,7 +1200,7 @@ def run_task_with_timeout(task_index, duration, job_id):
         'duration': duration,
         'task': task
     }
-    
+
     try:
         run_tasks_concurrently([task], info['capsolver_key'], info['capmonster_key'], proxies, info['discord_webhook'])
     except Exception as e:
@@ -951,17 +1211,31 @@ def run_task_with_timeout(task_index, duration, job_id):
         if job_id in running_tasks:
             del running_tasks[job_id]
 
+# Reload scheduled tasks on startup (must be after start_and_stop_task is defined)
+reload_scheduled_tasks()
+
 def view_scheduled_tasks():
     while True:
         click.clear()
         click.echo(click.style('Scheduled Tasks', bold=True, fg='cyan'))
         jobs = scheduler.get_jobs()
+        tasks = load_data(TASKS_FILE, [])
+        scheduled_tasks_data = load_data(SCHEDULED_TASKS_FILE, [])
+
         if not jobs:
             click.echo("No scheduled tasks.")
         else:
             for i, job in enumerate(jobs):
                 next_run = job.next_run_time.strftime("%Y-%m-%d %H:%M:%S") if job.next_run_time else "N/A"
-                click.echo(f"{i+1}) Task ID: {job.id}, Next run: {next_run}")
+                # Find task name from scheduled task data
+                task_name = "Unknown"
+                for st in scheduled_tasks_data:
+                    if st['job_id'] == job.id:
+                        task_index = st['task_index']
+                        if task_index < len(tasks):
+                            task_name = tasks[task_index].get('task_name', f"Restaurant {tasks[task_index]['restaurant_id']}")
+                        break
+                click.echo(f"{i+1}) {task_name} - Next run: {next_run}")
         
         click.echo("\nRunning Tasks:")
         for i, (job_id, task_info) in enumerate(running_tasks.items()):
@@ -988,8 +1262,21 @@ def remove_scheduled_task(jobs):
         click.echo("No scheduled tasks to remove.")
         time.sleep(2)
         return
-    
-    choices = [(f"Task {i+1}: {job.id}", job.id) for i, job in enumerate(jobs)]
+
+    tasks = load_data(TASKS_FILE, [])
+    scheduled_tasks_data = load_data(SCHEDULED_TASKS_FILE, [])
+
+    choices = []
+    for i, job in enumerate(jobs):
+        task_name = "Unknown"
+        for st in scheduled_tasks_data:
+            if st['job_id'] == job.id:
+                task_index = st['task_index']
+                if task_index < len(tasks):
+                    task_name = tasks[task_index].get('task_name', f"Restaurant {tasks[task_index]['restaurant_id']}")
+                break
+        choices.append((f"{task_name} ({job.id})", job.id))
+
     questions = [
         inquirer.List('job_id',
                       message="Select a task to remove",
@@ -998,6 +1285,7 @@ def remove_scheduled_task(jobs):
     answers = inquirer.prompt(questions)
     
     scheduler.remove_job(answers['job_id'])
+    remove_scheduled_task_from_file(answers['job_id'])
     click.echo(f"Removed scheduled task: {answers['job_id']}")
     time.sleep(2)
 

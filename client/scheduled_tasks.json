@@ -1,0 +1,42 @@
+[
+    {
+        "job_id": "task_0_20260207135650",
+        "task_index": 0,
+        "schedule_time": "00:00",
+        "schedule_date": "2026-02-20",
+        "repeat": "Once",
+        "duration": 10
+    },
+    {
+        "job_id": "task_0_20260207135703",
+        "task_index": 0,
+        "schedule_time": "00:00",
+        "schedule_date": "2026-02-21",
+        "repeat": "Once",
+        "duration": 10
+    },
+    {
+        "job_id": "task_1_20260207135720",
+        "task_index": 1,
+        "schedule_time": "09:00",
+        "schedule_date": "2026-02-14",
+        "repeat": "Once",
+        "duration": 10
+    },
+    {
+        "job_id": "task_1_20260207135735",
+        "task_index": 1,
+        "schedule_time": "09:00",
+        "schedule_date": "2026-02-15",
+        "repeat": "Once",
+        "duration": 10
+    },
+    {
+        "job_id": "task_2_20260207135752",
+        "task_index": 2,
+        "schedule_time": "00:00",
+        "schedule_date": "2026-02-08",
+        "repeat": "Once",
+        "duration": 10
+    }
+]

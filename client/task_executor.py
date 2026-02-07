@@ -49,12 +49,18 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
             response = requests.get(url, headers=headers, proxies=select_proxy, verify=False)
 
             if response.status_code != 200:
-                send_discord_notification(webhook_url, f'(1) Failed to get availability for restaurant {restaurant_id} - {response.text} - {response.status_code}')
+                error_msg = response.json().get('message', response.text) if response.text else 'No response'
+                if response.status_code == 429:
+                    send_discord_notification(webhook_url, f'**Rate Limited** | Restaurant {restaurant_id} | Too many requests. Waiting before retry.')
+                elif response.status_code == 419:
+                    send_discord_notification(webhook_url, f'**Auth Failed** | Restaurant {restaurant_id} | Token expired or invalid. Please update auth_token.')
+                else:
+                    send_discord_notification(webhook_url, f'**Calendar Error** | Restaurant {restaurant_id} | Status {response.status_code}: {error_msg}')
                 return
-            
+
             data = response.json()
             if 'scheduled' not in data:
-                send_discord_notification(webhook_url, f'Unexpected response format for API1 for restaurant {restaurant_id} - {data}')
+                send_discord_notification(webhook_url, f'**Unexpected Response** | Restaurant {restaurant_id} | Calendar API returned invalid format')
                 return
             for entry in data['scheduled']:
                 if entry['inventory']['reservation'] == 'available':
@@ -63,13 +69,14 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
                     response2 = requests.get(url2, headers=headers, proxies=select_proxy, verify=False)
 
                     if response2.status_code != 200:
-                        send_discord_notification(webhook_url, f'(2) Failed to get availability for restaurant {restaurant_id}')
+                        error_msg = response2.json().get('message', response2.text) if response2.text else 'No response'
+                        send_discord_notification(webhook_url, f'**Slot Search Failed** | Restaurant {restaurant_id} | Date {entry["date"]} | Status {response2.status_code}: {error_msg}')
                         return
 
                     data2 = response2.json()
 
-                    if 'results' not in data2 :
-                        send_discord_notification(webhook_url, f'Unexpected response format for API2 for restaurant {restaurant_id} - {data2}')
+                    if 'results' not in data2:
+                        send_discord_notification(webhook_url, f'**Unexpected Response** | Restaurant {restaurant_id} | Slot search API returned invalid format')
                         return
 
                     if 'results' in data2 and 'venues' in data2['results'] and data2['results']['venues']:
@@ -81,19 +88,20 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
                                 book_token = get_details(entry['date'], party_sz, config_token, restaurant_id, headers, select_proxy)
                                 print('\nBook_token is :', book_token)
                                 if not book_token:
-                                    send_discord_notification(webhook_url, f'Failed to get book token for restaurant {restaurant_id}')
+                                    send_discord_notification(webhook_url, f'**Booking Token Failed** | Restaurant {restaurant_id} | Date {entry["date"]} | Could not retrieve booking token from details API')
                                     return
                                 reservationVal = book_reservation(book_token, auth_token, payment_id, entry['date'], party_sz, restaurant_id, config_token, headers, select_proxy)
 
                                 if 'reservation_id' in reservationVal or ('specs' in reservationVal and 'reservation_id' in reservationVal['specs']):
-                                    send_discord_notification(webhook_url, f'Reservation booked for restaurant {restaurant_id} - {reservationVal}')
+                                    send_discord_notification(webhook_url, f'**Reservation Confirmed** | Restaurant {restaurant_id} | Date {entry["date"]} | Party of {party_sz}')
                                     return
                                 else:
-                                    send_discord_notification(webhook_url, f'Failed to book reservation for restaurant {restaurant_id} - {reservationVal}')
+                                    error_detail = reservationVal.get('message', str(reservationVal))
+                                    send_discord_notification(webhook_url, f'**Booking Failed** | Restaurant {restaurant_id} | Date {entry["date"]} | {error_detail}')
                                     return
-                                
+
                     else:
-                        send_discord_notification(webhook_url, f'Unexpected response format for API2 for restaurant {restaurant_id} - {data2}')
+                        send_discord_notification(webhook_url, f'**No Slots Found** | Restaurant {restaurant_id} | Date {entry["date"]} | Availability shown but no bookable slots returned')
                         return
                 else:
                     continue
