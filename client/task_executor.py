@@ -17,6 +17,7 @@ def format_proxy(proxy_str):
     }
 
 def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
+    print(f"[DEBUG] Starting task for restaurant {task.get('restaurant_id', 'unknown')}", flush=True)
     auth_token = task['auth_token']
     payment_id = task['payment_id']
     restaurant_id = task['restaurant_id']
@@ -46,6 +47,7 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
             select_proxy = format_proxy(random.choice(proxies)) if proxies else None
 
             url = f"https://api.resy.com/4/venue/calendar?venue_id={restaurant_id}&num_seats={party_sz}&start_date={start_date}&end_date={end_date}"
+            print(f"[{restaurant_id}] Checking availability...", flush=True)
             response = requests.get(url, headers=headers, proxies=select_proxy, verify=False)
 
             if response.status_code != 200:
@@ -107,7 +109,7 @@ def execute_task(task, capsolver_key, capmonster_key, proxies, webhook_url):
                     continue
         except Exception as e:
             import traceback
-            print('failed to execute task')
+            print(f'[ERROR] Failed to execute task: {e}', flush=True)
             traceback.print_exc()
             break
         time.sleep(delay/1000)
